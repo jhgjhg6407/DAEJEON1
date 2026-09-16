@@ -2842,17 +2842,27 @@ function computeProjectedRow(dealer, month) {
   // (특히 미완료 비중이 높은 대리점), 0점 포함 방식이 실제 파일과 더 가깝게 일치함.
   const avgTimeScore = recs.length ? recs.reduce((sum,r) => sum + (r.d2!==null && r.d2!==undefined ? scoreOfDurationProjected(r.d2) : 0), 0) / recs.length : null;
 
-  // 조치정보입력율(15점): 2026-08부터 기준 변경 - 미방문 건은 입력을 했더라도 감점 대상 (방문 AND 입력완료 건만 인정)
-  const iiVals = recs.filter(r => r.ii !== undefined && r.v !== undefined && r.v !== null);
-  const inputScore = iiVals.length ? (iiVals.filter(r=>r.v===1 && r.ii===1).length / iiVals.length) * 15 : null;
+  // 조치정보입력율(15점): 실측 검증 결과 2026-08부터 기준이 실제로 바뀜.
+  // 2026-07까지: "완료(ii=1)" 비율만 봐야 정확 (v요구 시 오차 3~4점, ii만 쓰면 오차 0.3~1점)
+  // 2026-08부터: "방문(v=1) AND 완료(ii=1)"이어야 정확 (8월 실측 오차 0.10 vs ii만 쓰면 3.98)
+  const inputScore = (() => {
+    if (!recs.length) return null;
+    if (month >= '2026-08') {
+      const v = recs.filter(r => r.ii !== undefined && r.v !== undefined && r.v !== null);
+      return v.length ? (v.filter(r=>r.v===1 && r.ii===1).length / v.length) * 15 : null;
+    }
+    return (recs.filter(r=>r.ii===1).length / recs.length) * 15;
+  })();
 
   // 서비스불만율(15점): 접수증상이 '불만 유형'/'불만 유형(설비)'인 건 비율의 역수 — 6월 데이터로 검증 시 오차 거의 0
   const complaintCount = recs.filter(r => r.cat === '불만 유형' || r.cat === '불만 유형(설비)').length;
   const complaintScore = recs.length ? (1 - complaintCount / recs.length) * 15 : null;
 
-  // 독촉율(10점): 콜센터 상담 중 세부증상 '방문 지연' 건 비율의 역수 — 별도 집계된 상담 데이터 기준
-  const urgeCount = (URGE_COUNTS_JULY && URGE_COUNTS_JULY[dealer]) || 0;
-  const urgeScore = recs.length ? (1 - urgeCount / recs.length) * 10 : null;
+  // 독촉율: 2026-01부터 고객만족도(5점) 항목이 신설되며 15점→10점으로 배점 조정됨
+  // (2025-08~2025-12는 15점 만점, 2026-01부터 10점 만점 — 실측 EVAL 데이터로 확인)
+  const urgeMax = month >= '2026-01' ? 10 : 15;
+  const urgeCount = recs.filter(r => r.sc === '방문 지연').length;
+  const urgeScore = recs.length ? (1 - urgeCount / recs.length) * urgeMax : null;
 
   // 재방문율(15점): 같은 전화번호+동일 세부증상이 30일 이내 재접수된 건 비율의 역수 — 6월 검증 시 19/36 정확일치, 평균오차 0.81건
   const revisitCount = recs.filter(r => r.rv === 1).length;
@@ -2874,7 +2884,8 @@ function computeProjectedRow(dealer, month) {
   return { dealer, consultant, total: Math.round(total*10)/10, grade: gradeOf(total), notVisitedRate,
     inputScore, apptScore, avgTimeScore, revisitScore, complaintScore, urgeScore, csScore,
     hasPrior: !!prior, recCount: recs.length,
-    inputDone: iiVals.filter(r=>r.v===1 && r.ii===1).length, inputTotal: iiVals.length,
+    inputDone: month >= '2026-08' ? recs.filter(r=>r.v===1 && r.ii===1).length : recs.filter(r=>r.ii===1).length,
+    inputTotal: month >= '2026-08' ? recs.filter(r => r.ii !== undefined && r.v !== undefined && r.v !== null).length : recs.length,
     apptWithin: within1, apptTotal: d1vals.length, avgTimeTotal: recs.length };
 }
 
@@ -2898,8 +2909,8 @@ function computeEngineerBreakdown(dealer, month) {
     const within1 = d1vals.filter(v=>v<=60).length;
     const apptScore = d1vals.length ? apptScoreFromRate(within1, d1vals.length) : null;
     const avgTimeScore = rs.length ? rs.reduce((sum,r) => sum + (r.d2!==null && r.d2!==undefined ? scoreOfDurationProjected(r.d2) : 0), 0) / rs.length : null;
-    const iiVals = rs.filter(r => r.ii !== undefined && r.v !== undefined && r.v !== null);
-    const inputScore = iiVals.length ? (iiVals.filter(r=>r.v===1 && r.ii===1).length / iiVals.length) * 15 : null;
+    const iiVals = month >= '2026-08' ? rs.filter(r => r.ii !== undefined && r.v !== undefined && r.v !== null) : rs;
+    const inputScore = iiVals.length ? (iiVals.filter(r=>month >= '2026-08' ? (r.v===1 && r.ii===1) : r.ii===1).length / iiVals.length) * 15 : null;
     const complaintCount = rs.filter(r => r.cat === '불만 유형' || r.cat === '불만 유형(설비)').length;
     const complaintScore = rs.length ? (1 - complaintCount/rs.length) * 15 : null;
     const revisitCount = rs.filter(r => r.rv === 1).length;
@@ -2993,7 +3004,7 @@ function renderProjectionTab() {
       let text;
       if (kind === 'input') {
         if (!r.inputTotal) return;
-        text = `조치정보입력: 총 ${r.inputTotal}건 중 ${r.inputDone}건 방문+입력완료 (${(r.inputDone/r.inputTotal*100).toFixed(1)}%) · 미방문 건은 입력해도 미인정`;
+        text = `조치정보입력: 총 ${r.inputTotal}건 중 ${r.inputDone}건 조치완료 (${(r.inputDone/r.inputTotal*100).toFixed(1)}%)`;
       } else if (kind === 'appt') {
         if (!r.apptTotal) return;
         text = `약속시간입력(1시간 이내 확정): 총 ${r.apptTotal}건 중 ${r.apptWithin}건 (${(r.apptWithin/r.apptTotal*100).toFixed(1)}%)`;
