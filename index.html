@@ -1040,9 +1040,13 @@ const NANUMGOTHIC_REGULAR_B64 = "AAEAAAAPAIAAAwBwT1MvMmF/7j4AHS4cAAAAYGNtYXBCeLy
     <div class="gridrow full">
       <div class="panel">
         <h3>이례적 모델·부품 조합 후보 <span style="font-weight:400;font-size:12px;color:#D64545;">(부정입력 점검용)</span></h3>
-        <div class="sub">해당 부품이 전체적으로는 자주 쓰이지만, 이 모델(군)에서는 이번이 사실상 처음(1~2건)인 조합만 표시 (부품명에 해당 모델이 이미 명시된 경우는 제외) · 행을 클릭하면 상담번호가 보입니다</div>
-        <div style="margin:8px 0 12px;">
+        <div class="sub">해당 부품이 전체적으로는 자주 쓰이지만, 이 모델(군)에서는 이번이 사실상 처음(1~2건)인 조합만 표시 (부품명에 해당 모델이 이미 명시된 경우는 제외) · 행을 클릭하면 상담번호가 보입니다 · "정상으로 등록" 클릭 시 이 브라우저에서는 다음부터 목록에 안 뜹니다</div>
+        <div style="margin:8px 0 12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
           <input type="text" id="modelAnomalySearch" placeholder="모델·부품명·대리점 검색..." style="width:280px;padding:7px 10px;border:1px solid #D1D8E0;border-radius:6px;font-size:13px;" />
+          <span id="userWhitelistCount" style="font-size:12px;color:#6B7684;"></span>
+          <button id="userWhitelistExportBtn" class="daybtn" style="display:none;font-size:12px;padding:5px 12px;">내가 등록한 목록 내보내기</button>
+        </div>
+        <div id="userWhitelistPanel" style="display:none;margin-bottom:10px;padding:8px 12px;background:#F7F9FB;border-radius:6px;font-size:12px;"></div>
         </div>
         <div class="tablewrap" style="max-height:500px;">
           <table class="evaltable">
@@ -1054,6 +1058,7 @@ const NANUMGOTHIC_REGULAR_B64 = "AAEAAAAPAIAAAwBwT1MvMmF/7j4AHS4cAAAAYGNtYXBCeLy
                 <th data-akey="total" style="cursor:pointer;">부품 전체 사용건수</th>
                 <th data-akey="dealer" style="text-align:left;cursor:pointer;">대리점</th>
                 <th data-akey="month" style="text-align:left;cursor:pointer;">해당 월</th>
+                <th style="text-align:center;">정상 등록</th>
               </tr>
             </thead>
             <tbody id="modelAnomalyBody"></tbody>
@@ -3531,7 +3536,74 @@ const PART_MODEL_WHITELIST = {
 };
 function isWhitelistedPartModel(code, fam) {
   const list = PART_MODEL_WHITELIST[code];
-  return list ? list.includes(fam.toUpperCase()) : false;
+  if (list && list.includes(fam.toUpperCase())) return true;
+  const userList = getUserWhitelist()[code];
+  return userList ? userList.includes(fam.toUpperCase()) : false;
+}
+
+// 사용자가 대시보드 화면에서 직접 "정상 등록"한 조합 — 이 브라우저의 localStorage에 저장됨.
+// 코드 안의 PART_MODEL_WHITELIST(고정 목록)와 별개로 누적되며, 새로고침해도 유지됨.
+// 단, 대시보드 파일을 새로 받으면(다른 파일) 이 브라우저 저장소가 안 이어질 수 있어
+// "내가 등록한 목록 내보내기" 버튼으로 백업해서 다음 업데이트 때 반영을 요청할 수 있음.
+const USER_WHITELIST_KEY = 'daejeon_dashboard_user_part_whitelist_v1';
+function getUserWhitelist() {
+  try {
+    const raw = localStorage.getItem(USER_WHITELIST_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function saveUserWhitelist(wl) {
+  try { localStorage.setItem(USER_WHITELIST_KEY, JSON.stringify(wl)); } catch (e) {}
+}
+function addToUserWhitelist(code, fam) {
+  const wl = getUserWhitelist();
+  const famU = fam.toUpperCase();
+  if (!wl[code]) wl[code] = [];
+  if (!wl[code].includes(famU)) wl[code].push(famU);
+  saveUserWhitelist(wl);
+}
+function removeFromUserWhitelist(code, fam) {
+  const wl = getUserWhitelist();
+  if (wl[code]) {
+    wl[code] = wl[code].filter(f => f !== fam.toUpperCase());
+    if (!wl[code].length) delete wl[code];
+  }
+  saveUserWhitelist(wl);
+}
+function renderUserWhitelistPanel() {
+  const wl = getUserWhitelist();
+  const entries = [];
+  Object.keys(wl).forEach(code => wl[code].forEach(fam => entries.push({ code, fam })));
+  const countEl = document.getElementById('userWhitelistCount');
+  const exportBtn = document.getElementById('userWhitelistExportBtn');
+  const panel = document.getElementById('userWhitelistPanel');
+  if (countEl) countEl.textContent = entries.length ? `이 브라우저에서 정상 등록한 조합: ${entries.length}건` : '';
+  if (exportBtn) exportBtn.style.display = entries.length ? '' : 'none';
+  if (!panel) return;
+  if (!entries.length) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  panel.style.display = 'block';
+  panel.innerHTML = `<div style="margin-bottom:4px;color:#45505F;">정상 등록된 조합 (클릭하면 다시 이례적 목록으로 되돌립니다)</div>` +
+    entries.map(e => `<span class="restorechip" data-unwl-code="${esc(e.code)}" data-unwl-fam="${esc(e.fam)}" style="margin:2px 4px 2px 0;display:inline-block;">${esc(e.fam)} · ${esc(e.code)} ✕</span>`).join('');
+  panel.querySelectorAll('[data-unwl-code]').forEach(chip => {
+    chip.addEventListener('click', () => {
+      removeFromUserWhitelist(chip.dataset.unwlCode, chip.dataset.unwlFam);
+      renderModelAnomalyTable(filteredRecords().filter(r => r.md && modelFamilyOf(r.md)));
+    });
+  });
+}
+if (document.getElementById('userWhitelistExportBtn')) {
+  document.getElementById('userWhitelistExportBtn').addEventListener('click', () => {
+    const wl = getUserWhitelist();
+    const lines = [];
+    Object.keys(wl).forEach(code => wl[code].forEach(fam => lines.push(`  '${code}': 모델군 '${fam}' 추가`)));
+    const text = `대전지사 대시보드 — 사용자 등록 화이트리스트 (${new Date().toISOString().slice(0,10)})\n부품코드-모델군 조합을 다음 업데이트 때 대시보드에 영구 반영해달라고 채팅에 붙여넣어주세요:\n\n` + JSON.stringify(wl, null, 2);
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = '화이트리스트_내보내기.txt';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
 }
 
 function renderModelPartsTab() {
@@ -3700,7 +3772,7 @@ function renderModelAnomalyRows() {
   const tbody = document.getElementById('modelAnomalyBody');
   if (!tbody) return;
   if (!filtered.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#A6AEB8;padding:20px;">${q ? '검색 결과가 없습니다.' : '현재 선택 범위에서는 이례적인 조합이 발견되지 않았습니다.'}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#A6AEB8;padding:20px;">${q ? '검색 결과가 없습니다.' : '현재 선택 범위에서는 이례적인 조합이 발견되지 않았습니다.'}</td></tr>`;
     return;
   }
   tbody.innerHTML = filtered.map((c, idx) => {
@@ -3714,8 +3786,18 @@ function renderModelAnomalyRows() {
       <td>${partTotal[c.pkey]}건</td>
       <td>${esc(dealers)}</td>
       <td>${esc(monthsEx)}</td>
+      <td style="text-align:center;">${code!=='미확인'?`<button class="restorechip" data-wl-code="${esc(code)}" data-wl-fam="${esc(c.fam)}" data-wl-idx="${idx}">정상 등록</button>`:'-'}</td>
     </tr>`;
   }).join('');
+
+  tbody.querySelectorAll('[data-wl-code]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      addToUserWhitelist(btn.dataset.wlCode, btn.dataset.wlFam);
+      renderModelAnomalyTable(filteredRecords().filter(r => r.md && modelFamilyOf(r.md)));
+    });
+  });
+  renderUserWhitelistPanel();
 
   tbody.querySelectorAll('tr[data-anomaly-idx]').forEach(tr => {
     tr.addEventListener('click', () => {
@@ -3727,7 +3809,7 @@ function renderModelAnomalyRows() {
       const snList = c.examples.map(e => `${esc(e.dl)} · ${e.dt ? esc(e.dt) : fmtMonth(e.ym)} · ${e.cn ? esc(e.cn)+'님 · ' : ''}상담번호 ${e.sn ? esc(e.sn) : '(기록 없음, 2025년 건)'}`).join('<br>');
       const detailRow = document.createElement('tr');
       detailRow.id = 'anomalySnRow_'+idx;
-      detailRow.innerHTML = `<td colspan="6" style="background:#F7F9FB;text-align:left;font-size:12px;color:#45505F;padding:10px 14px;">${snList}</td>`;
+      detailRow.innerHTML = `<td colspan="7" style="background:#F7F9FB;text-align:left;font-size:12px;color:#45505F;padding:10px 14px;">${snList}</td>`;
       tr.after(detailRow);
     });
   });
